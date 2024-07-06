@@ -3,6 +3,7 @@
 import os
 from time import sleep
 from dataclasses import dataclass
+from functools import wraps
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
@@ -10,7 +11,10 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
+import cloudflare
+from cloudflare import Cloudflare
 from dotenv import dotenv_values  # pylint: disable=import-error
+
 
 @dataclass(frozen=False, kw_only=True)
 class LinksysRouter:
@@ -48,7 +52,8 @@ class LinksysRouter:
         """
         try:
             element_clickable = EC.element_to_be_clickable(element)
-            WebDriverWait(self.connection, self.time_out).until(element_clickable)
+            WebDriverWait(self.connection, self.time_out).until(
+                element_clickable)
         except TimeoutException:
             print(f"Timed out waiting for element {element}")
             self.close_connection()
@@ -62,7 +67,8 @@ class LinksysRouter:
         """
         try:
             element_present = EC.presence_of_element_located(element)
-            WebDriverWait(self.connection, self.time_out).until(element_present)
+            WebDriverWait(self.connection, self.time_out).until(
+                element_present)
         except TimeoutException:
             print(f"Timed out finding element {element}")
             self.close_connection()
@@ -82,7 +88,6 @@ class LinksysRouter:
             .move_to_element(page_element)\
             .click()\
             .perform()
-
 
     def get_isp_ip(self) -> str:
         """get_isp_ip - connect to router web page and get isp ip address
@@ -106,13 +111,13 @@ class LinksysRouter:
         btn_submit.click()
 
         # To work around page loading issues
-        sleep(self.time_out)
+        sleep(10)
 
         # wait for the Troubleshooting element to be located and click it
         trbl_icon = (By.ID, 'iconTroubleshooting')
         self.click_on_element(trbl_icon)
 
-        sleep(10)
+        sleep(5)
         # wait for the diagnostic tab to be located and click it
         diag_tab = (By.ID, 'diagnosticsTab')
         self.click_on_element(diag_tab)
@@ -128,6 +133,76 @@ class LinksysRouter:
         return ip_addr
 
 
+def run_cf_exception_checking(func):
+    """run_cf_exception_checking - decorator to run cloudflare calls with
+       exception checking
+
+    Args:
+        func (_type_): the cloudflare function to call
+
+    Returns:
+        Any: whatever the wrapped function returns
+    """
+    @wraps(func)
+    def wrapper_func(*args, **kwargs):
+        try:
+            ret = func(*args, **kwargs)
+        except cloudflare.APIConnectionError as e:
+            print("The server could not be reached")
+            # an underlying Exception, likely raised within httpx.
+            print(e.__cause__)
+        except cloudflare.RateLimitError:
+            print("A 429 status code was received; we should back off a bit.")
+        except cloudflare.APIStatusError as e:
+            print("Another non-200-range status code was received")
+            print(e.status_code)
+            print(e.response)
+        return ret
+    return wrapper_func
+
+@run_cf_exception_checking
+def get_client_dns_record(cf_client: Cloudflare, zone_id: str, dns_record_id: str):
+    """get_client_dns_record - call the cloudflare api to get the client dns record
+
+    Args:
+        cf_client (Cloudflare): _description_
+        zone_id (str): _description_
+        dns_record_id (str): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    return (cf_client.dns.records.get(zone_id=zone_id,
+                                      dns_record_id=dns_record_id))
+
+
+@run_cf_exception_checking
+def set_client_dns_record(cf_client: Cloudflare,
+                          zone_id: str,
+                          dns_record_id: str,
+                          isp_ip: str,
+                          zone_rec_name: str):
+    """set_client_dns_record - call the cloudflare api to set the client dns record
+
+    Args:
+        cf_client (Cloudflare): _description_
+        zone_id (str): _description_
+        dns_record_id (str): _description_
+        isp_ip (str): _description_
+        zone_rec_name (str): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    return (cf_client.dns.records.update(
+                dns_record_id=dns_record_id,
+                zone_id=zone_id,
+                type="A",
+                proxied=True,
+                content=isp_ip,
+                name=zone_rec_name)
+            )
+
 def main():
     """Main function for dyndns.py - Utility to set Cloudflare Dynamic DNS
     """
@@ -137,8 +212,27 @@ def main():
                            rtr_url=private['RTR_URL'],
                            time_out=int(private['RTR_TIMEOUT']))
     isp_ip = router.get_isp_ip()
-    print(isp_ip)
 
+    # Now get the current Cloudflare setting
+    cf_client = Cloudflare(
+        api_email=private['CFLARE_API_EMAIL'],
+        api_key=private['CFLARE_API_KEY']
+    )
+
+    cf_zone_rec = get_client_dns_record(cf_client=cf_client,
+                                        zone_id=private['CFLARE_ZONE_ID'],
+                                        dns_record_id=private['CFLARE_ZONE_REC_ID'])
+
+    if isp_ip == cf_zone_rec.content:
+        print("Dynamic DNS is currently set to correct ip")
+    else:
+        print("Setting new ip address")
+        set_client_dns_record(cf_client=cf_client,
+                              dns_record_id=private['CFLARE_ZONE_REC_ID'],
+                              zone_id=private['CFLARE_ZONE_ID'],
+                              isp_ip=isp_ip,
+                              zone_rec_name=private['CFLARE_ZONE_REC_NAME']
+                             )
 
 if __name__ == "__main__":
     main()
