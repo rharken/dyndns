@@ -1,0 +1,1 @@
+docker run --rm --mount type=bind,source=<USER DIR>/.env,target=/usr/local/bin/.env,readonly -t dyndns

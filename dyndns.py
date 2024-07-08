@@ -11,9 +11,10 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
+from pyvirtualdisplay import Display
 import cloudflare
 from cloudflare import Cloudflare
-from dotenv import dotenv_values  # pylint: disable=import-error
+from dotenv import load_dotenv
 
 
 @dataclass(frozen=False, kw_only=True)
@@ -28,6 +29,10 @@ class LinksysRouter:
     def init_connection(self) -> None:
         """init_connection - initialize connection to web page
         """
+        # First open a virtual display
+        display = Display(visible=0, size=(1024, 768))
+        display.start()
+
         options = Options()
         # options.add_argument("--headless")
         self.connection = webdriver.Firefox(options=options)
@@ -43,6 +48,7 @@ class LinksysRouter:
         """close_connection - close connection to web page
         """
         self.connection.close()
+        self.connection.quit()
 
     def wait_for_clickable(self, element: tuple) -> None:
         """wait_for_clickable - Wait for a web page element to be clickable
@@ -206,32 +212,48 @@ def set_client_dns_record(cf_client: Cloudflare,
 def main():
     """Main function for dyndns.py - Utility to set Cloudflare Dynamic DNS
     """
-    private = dotenv_values()  # take environment variables from .env.
+    load_dotenv()  # take environment variables from .env.
 
-    router = LinksysRouter(rtr_pwd=private['RTR_PWD'],
-                           rtr_url=private['RTR_URL'],
-                           time_out=int(private['RTR_TIMEOUT']))
+    # Load up all the environment variables
+    rtr_pwd = os.getenv('RTR_PWD')
+    rtr_url = os.getenv('RTR_URL', 'http://192.168.1.1')
+    rtr_timeout = int(os.getenv('RTR_TIMEOUT', '30'))
+    api_email = os.getenv('CFLARE_API_EMAIL')
+    api_key = os.getenv('CFLARE_API_KEY')
+    zone_id = os.getenv('CFLARE_ZONE_ID')
+    dns_record_id = os.getenv('CFLARE_ZONE_REC_ID')
+    zone_rec_name = os.getenv('CFLARE_ZONE_REC_NAME')
+
+    if any(v is None for v in [rtr_pwd, rtr_url, rtr_timeout,
+                               api_email, api_key, zone_id,
+                               dns_record_id, zone_rec_name]):
+        print('Runtime environment is not defined!')
+        os._exit(1)
+
+    router = LinksysRouter(rtr_pwd=rtr_pwd,
+                           rtr_url=rtr_url,
+                           time_out=rtr_timeout)
     isp_ip = router.get_isp_ip()
 
     # Now get the current Cloudflare setting
     cf_client = Cloudflare(
-        api_email=private['CFLARE_API_EMAIL'],
-        api_key=private['CFLARE_API_KEY']
+        api_email=api_email,
+        api_key=api_key
     )
 
     cf_zone_rec = get_client_dns_record(cf_client=cf_client,
-                                        zone_id=private['CFLARE_ZONE_ID'],
-                                        dns_record_id=private['CFLARE_ZONE_REC_ID'])
+                                        zone_id=zone_id,
+                                        dns_record_id=dns_record_id)
 
     if isp_ip == cf_zone_rec.content:
         print("Dynamic DNS is currently set to correct ip")
     else:
         print("Setting new ip address")
         set_client_dns_record(cf_client=cf_client,
-                              dns_record_id=private['CFLARE_ZONE_REC_ID'],
-                              zone_id=private['CFLARE_ZONE_ID'],
+                              dns_record_id=dns_record_id,
+                              zone_id=zone_id,
                               isp_ip=isp_ip,
-                              zone_rec_name=private['CFLARE_ZONE_REC_NAME']
+                              zone_rec_name=zone_rec_name
                              )
 
 if __name__ == "__main__":
