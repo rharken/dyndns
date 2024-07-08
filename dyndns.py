@@ -5,13 +5,12 @@ from time import sleep
 from dataclasses import dataclass
 from functools import wraps
 from selenium import webdriver
-from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
-from pyvirtualdisplay import Display
 import cloudflare
 from cloudflare import Cloudflare
 from dotenv import load_dotenv
@@ -29,13 +28,9 @@ class LinksysRouter:
     def init_connection(self) -> None:
         """init_connection - initialize connection to web page
         """
-        # First open a virtual display
-        display = Display(visible=0, size=(1024, 768))
-        display.start()
-
         options = Options()
-        # options.add_argument("--headless")
-        self.connection = webdriver.Firefox(options=options)
+        options.add_argument("--headless=new")
+        self.connection = webdriver.Chrome(options=options)
 
         try:
             self.connection.get(self.rtr_url)
@@ -49,6 +44,7 @@ class LinksysRouter:
         """
         self.connection.close()
         self.connection.quit()
+        #self.display.stop()
 
     def wait_for_clickable(self, element: tuple) -> None:
         """wait_for_clickable - Wait for a web page element to be clickable
